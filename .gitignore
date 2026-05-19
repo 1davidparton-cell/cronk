@@ -2,3 +2,4 @@
 .DS_Store
 node_modules
 cronk-history.json
+.cronk-secret.local

@@ -3,14 +3,18 @@
     "label": "Account 1",
     "home": "~/.cronk/acct1",
     "prompt": "ping",
-    "schedule": ["05:00"],
-    "days": null
+    "schedule": [],
+    "days": null,
+    "anchorTime": "05:00",
+    "intervalMinutes": 301
   },
   "acct2": {
     "label": "Account 2",
     "home": "~/.cronk/acct2",
     "prompt": "ping",
-    "schedule": ["05:00"],
-    "days": null
+    "schedule": [],
+    "days": null,
+    "anchorTime": "05:00",
+    "intervalMinutes": 301
   }
 }

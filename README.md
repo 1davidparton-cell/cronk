@@ -125,49 +125,61 @@ Open the PWA on your phone, tap the gear on each tile:
 
 Save. Tap the tile. Status dot goes amber while firing, green on success.
 
-## 6. Set up automatic firing (optional)
+## 6. Set up the auto-fire timer
 
-The companion server has a built-in scheduler that fires accounts at
-specific times every day. No phone required, no PWA tap required.
+Two ways to schedule fires:
 
-Edit `ACCOUNTS` in `server.js`:
+**A. From the PWA (recommended).** Open the gear on a tile. Set:
+- **Anchor time:** first fire of the day in your Mac's local time (e.g. `05:00`).
+- **Every:** interval in minutes between fires. `301` = 5h 1m, which keeps
+  a continuous rolling Anthropic window during your waking hours.
+- **Days:** every day / weekdays / weekends.
 
-```js
-const ACCOUNTS = {
-  acct1: {
-    label: 'Work Claude',
-    home: path.join(os.homedir(), '.cronk', 'acct1'),
-    prompt: 'ping',
-    schedule: ['05:00'],         // every day at 5:00 AM
-    days: undefined              // every day; or [1,2,3,4,5] for weekdays
+The PWA shows a live preview of the derived schedule (`05:00 · 10:01 · 15:02 · 20:03`).
+Save sends it to your Mac via `PUT /api/account/<slug>`, which persists to
+`cronk.config.json` — no server restart needed.
+
+**B. By editing `cronk.config.json` directly.** Two scheduling modes:
+
+```jsonc
+{
+  "acct1": {
+    "label": "Account 1",
+    "home": "~/.cronk/acct1",
+    "prompt": "ping",
+    "anchorTime": "05:00",       // interval mode: anchor + interval generates
+    "intervalMinutes": 301,      //   the daily grid (05:00, 10:01, 15:02, 20:03)
+    "schedule": [],              //   leave empty when using interval mode
+    "days": null                 //   null = every day, [1,2,3,4,5] = weekdays
   },
-  acct2: {
-    label: 'Home Claude',
-    home: path.join(os.homedir(), '.cronk', 'acct2'),
-    prompt: 'ping',
-    schedule: ['05:00', '11:00'], // primes two 5-hour windows
-    days: [1, 2, 3, 4, 5]         // weekdays only
+  "acct2": {
+    "label": "Account 2",
+    "home": "~/.cronk/acct2",
+    "prompt": "ping",
+    "schedule": ["05:00", "11:00"],  // legacy HH:MM mode (ignored if anchorTime set)
+    "days": [1, 2, 3, 4, 5]
   }
-};
+}
 ```
 
-`schedule` is an array of `HH:MM` strings in your server's **local time**.
-`days` uses 0=Sunday through 6=Saturday. Omit `days` to fire every day.
-Set `schedule: []` to disable auto-firing for an account.
-
-Verify the schedule loaded correctly. The server prints next-run times at
-startup, and you can also check live:
+Verify what loaded:
 
 ```bash
-curl http://localhost:8787/
+curl http://localhost:8787/api/status | jq '.accounts[] | {label, anchorTime, intervalMinutes, effective_schedule, next_auto_fire}'
 ```
 
-Returns each account's schedule, configured days, and the next scheduled
-fire timestamp.
+### Keep the server running across reboots (macOS launchd)
 
-Keep the server running across reboots so the scheduler doesn't stop.
-On macOS, the easiest options are `pm2 start server.js` or a launchd plist
-in `~/Library/LaunchAgents/`. On Linux, `pm2` or a systemd unit.
+A ready-to-go agent lives at `~/Library/LaunchAgents/com.cronk.server.plist`:
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/com.cronk.server.plist   # enable + start
+launchctl list | grep cronk                                       # confirm running
+tail -f cronk.out.log                                             # follow logs
+launchctl unload ~/Library/LaunchAgents/com.cronk.server.plist    # stop
+```
+
+`KeepAlive` is on, so the server respawns if it crashes and starts on login.
 
 ## 7. Install to home screen
 

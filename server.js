@@ -18,7 +18,13 @@ const MIME = {
 
 // ---------- CONFIG ----------
 const PORT = process.env.PORT || 8787;
-const SHARED_SECRET = process.env.CRONK_SECRET || '';
+function readSecretFile(p) {
+  try { return fs.readFileSync(p, 'utf-8').trim(); } catch { return ''; }
+}
+const SHARED_SECRET =
+  process.env.CRONK_SECRET ||
+  (process.env.CRONK_SECRET_FILE ? readSecretFile(process.env.CRONK_SECRET_FILE) : '') ||
+  readSecretFile(path.join(__dirname, '.cronk-secret.local'));
 const CONFIG_PATH = path.join(__dirname, 'cronk.config.json');
 const HISTORY_PATH = path.join(__dirname, 'cronk-history.json');
 const MAX_HISTORY = 100;
@@ -445,6 +451,10 @@ server.listen(PORT, () => {
   console.log(`History: ${history.length} entries`);
   for (const [slug, a] of Object.entries(ACCOUNTS)) {
     const next = nextRunFor(a);
-    console.log(`  - ${slug}: schedule=[${(a.schedule || []).join(',')}]  next=${next ? next.toLocaleString() : 'none'}`);
+    const eff = effectiveSchedule(a);
+    const mode = (a.anchorTime && a.intervalMinutes)
+      ? `anchor=${a.anchorTime} every=${a.intervalMinutes}m`
+      : `schedule=[${(a.schedule || []).join(',')}]`;
+    console.log(`  - ${slug}: ${mode}  fires=[${eff.join(',') || 'none'}]  next=${next ? next.toLocaleString() : 'none'}`);
   }
 });
