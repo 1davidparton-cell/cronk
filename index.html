@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0a0e0a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Cronk">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="icon-192.png">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+  <title>Cronk</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0e0a;
+      --bg-grain: #0d110d;
+      --tile: #131a13;
+      --tile-hi: #1a221a;
+      --line: #243024;
+      --line-bright: #3a4a3a;
+      --text: #e8eae8;
+      --text-dim: #7a857a;
+      --accent: #ffb627;
+      --accent-dim: #a87a1c;
+      --claude: #cc785c;
+      --ok: #4ade80;
+      --err: #ef4444;
+      --pulse: rgba(255, 182, 39, 0.18);
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+      -webkit-font-smoothing: antialiased;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* faint scan-line / grain backdrop */
+    body::before {
+      content: "";
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image:
+        radial-gradient(circle at 50% 0%, rgba(255,182,39,0.06), transparent 55%),
+        repeating-linear-gradient(0deg, rgba(255,255,255,0.012) 0 1px, transparent 1px 3px);
+    }
+
+    .app {
+      position: relative; z-index: 1;
+      min-height: 100dvh;
+      display: flex; flex-direction: column;
+      padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom);
+      max-width: 720px; margin: 0 auto;
+    }
+
+    header {
+      padding: 22px 4px 18px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px dashed var(--line);
+    }
+    .brand {
+      display: flex; align-items: baseline; gap: 10px;
+    }
+    .brand h1 {
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      font-size: 22px;
+      letter-spacing: 0.18em;
+      color: var(--accent);
+    }
+    .brand .tag {
+      font-size: 10px;
+      color: var(--text-dim);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+    }
+    .clock {
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 0.12em;
+      font-variant-numeric: tabular-nums;
+    }
+    .clock .dot {
+      display: inline-block; width: 6px; height: 6px; border-radius: 50%;
+      background: var(--ok); margin-right: 6px; vertical-align: middle;
+      animation: blink 2s infinite;
+    }
+    @keyframes blink { 0%, 60% { opacity: 1; } 80%, 100% { opacity: 0.25; } }
+
+    main {
+      flex: 1;
+      padding: 18px 0 24px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+    }
+    @media (min-width: 520px) {
+      .grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    .tile {
+      position: relative;
+      background: var(--tile);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 22px 20px;
+      min-height: 168px;
+      display: flex; flex-direction: column; justify-content: space-between;
+      cursor: pointer;
+      transition: transform 80ms ease, border-color 200ms ease, background 200ms ease;
+      overflow: hidden;
+    }
+    .tile:active { transform: scale(0.985); background: var(--tile-hi); }
+
+    .tile .corner {
+      position: absolute; top: 10px; right: 10px;
+      display: flex; gap: 6px; align-items: center;
+    }
+    .tile .gear {
+      background: transparent; border: 1px solid var(--line);
+      color: var(--text-dim); width: 28px; height: 28px; border-radius: 6px;
+      display: grid; place-items: center; font-size: 14px; cursor: pointer;
+    }
+    .tile .gear:active { background: var(--line); }
+    .tile .status {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--line-bright);
+      transition: background 200ms ease, box-shadow 200ms ease;
+    }
+    .tile[data-state="firing"] .status { background: var(--accent); box-shadow: 0 0 12px var(--accent); animation: ping 0.8s ease infinite; }
+    .tile[data-state="ok"] .status { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+    .tile[data-state="err"] .status { background: var(--err); box-shadow: 0 0 10px var(--err); }
+    @keyframes ping { 0% { transform: scale(1); } 50% { transform: scale(1.4); opacity: 0.7; } 100% { transform: scale(1); } }
+
+    .tile .label {
+      font-size: 11px; letter-spacing: 0.22em; color: var(--text-dim);
+      text-transform: uppercase;
+    }
+    .tile .name {
+      font-family: 'Space Mono', monospace;
+      font-size: 28px; font-weight: 700; line-height: 1.1;
+      color: var(--claude);
+      margin-top: 4px;
+    }
+    .tile .meta {
+      display: flex; justify-content: space-between; align-items: flex-end;
+      gap: 12px;
+      font-size: 11px;
+      color: var(--text-dim);
+      letter-spacing: 0.08em;
+      font-variant-numeric: tabular-nums;
+    }
+    .tile .last-val { color: var(--text); }
+
+    .tile.firing::after {
+      content: "";
+      position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(circle at 50% 50%, var(--pulse), transparent 70%);
+      animation: pulse-bg 0.8s ease infinite;
+    }
+    @keyframes pulse-bg { 0%, 100% { opacity: 0.2; } 50% { opacity: 0.7; } }
+
+    .add-tile {
+      background: transparent;
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      color: var(--text-dim);
+      min-height: 60px;
+      font-family: inherit;
+      letter-spacing: 0.18em;
+      font-size: 12px;
+      cursor: pointer;
+      transition: color 200ms ease, border-color 200ms ease;
+    }
+    .add-tile:active { color: var(--accent); border-color: var(--accent-dim); }
+    .add-tile[hidden] { display: none; }
+
+    footer {
+      padding: 14px 4px 18px;
+      border-top: 1px dashed var(--line);
+      font-size: 10px; color: var(--text-dim);
+      letter-spacing: 0.16em;
+      display: flex; justify-content: space-between; text-transform: uppercase;
+    }
+
+    /* ---------- modal ---------- */
+    .scrim {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+      display: none; z-index: 50;
+      backdrop-filter: blur(6px);
+    }
+    .scrim.open { display: block; }
+
+    .sheet {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      background: var(--bg-grain);
+      border-top: 1px solid var(--line-bright);
+      border-radius: 18px 18px 0 0;
+      padding: 16px 18px calc(env(safe-area-inset-bottom) + 18px);
+      transform: translateY(100%);
+      transition: transform 240ms cubic-bezier(.2,.7,.2,1);
+      z-index: 60;
+      max-height: 92dvh; overflow-y: auto;
+    }
+    .sheet.open { transform: translateY(0); }
+    .sheet .handle {
+      width: 38px; height: 4px; background: var(--line-bright);
+      border-radius: 2px; margin: 0 auto 14px;
+    }
+    .sheet h2 {
+      font-family: 'Space Mono', monospace;
+      font-size: 15px; letter-spacing: 0.18em; color: var(--accent);
+      text-transform: uppercase; margin-bottom: 14px;
+    }
+    .field {
+      margin-bottom: 14px;
+    }
+    .field label {
+      display: block;
+      font-size: 10px; letter-spacing: 0.2em; color: var(--text-dim);
+      text-transform: uppercase; margin-bottom: 6px;
+    }
+    .field input, .field select, .field textarea {
+      width: 100%;
+      background: var(--tile); color: var(--text);
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 11px 12px;
+      font-family: inherit; font-size: 14px;
+      outline: none;
+    }
+    .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent-dim); }
+    .field textarea { min-height: 86px; resize: vertical; font-size: 12px; }
+    .field .hint { font-size: 10px; color: var(--text-dim); margin-top: 5px; letter-spacing: 0.04em; }
+
+    .actions { display: flex; gap: 10px; padding-top: 6px; }
+    .btn {
+      flex: 1; padding: 13px 14px;
+      border-radius: 8px; border: 1px solid var(--line);
+      background: var(--tile); color: var(--text);
+      font-family: inherit; font-size: 13px; letter-spacing: 0.14em;
+      text-transform: uppercase; cursor: pointer;
+    }
+    .btn.primary { background: var(--accent); color: #1a1100; border-color: var(--accent); font-weight: 700; }
+    .btn.danger { color: var(--err); border-color: rgba(239,68,68,0.4); }
+    .btn:active { transform: scale(0.98); }
+
+    .toast {
+      position: fixed; left: 50%; bottom: 28px; transform: translate(-50%, 30px);
+      background: var(--tile-hi); border: 1px solid var(--line-bright);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 12px; letter-spacing: 0.08em;
+      color: var(--text);
+      opacity: 0; transition: opacity 220ms, transform 220ms;
+      pointer-events: none; z-index: 80;
+      max-width: 90vw;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast.ok { border-color: var(--ok); }
+    .toast.err { border-color: var(--err); }
+
+    /* connection status */
+    .clock .dot.offline { background: var(--err); animation: none; }
+
+    /* cooldown overlay */
+    .tile.cooldown { pointer-events: none; opacity: 0.6; }
+    .tile .cooldown-bar {
+      position: absolute; bottom: 0; left: 0; height: 3px;
+      background: var(--accent); border-radius: 0 0 14px 14px;
+      transition: width 1s linear;
+    }
+    .tile .cooldown-label {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 11px; letter-spacing: 0.16em;
+      color: var(--accent); text-transform: uppercase;
+      display: none;
+    }
+    .tile.cooldown .cooldown-label { display: block; }
+    .tile.cooldown .name { opacity: 0.3; }
+
+    /* pull to refresh */
+    .ptr {
+      text-align: center;
+      font-size: 10px; letter-spacing: 0.2em; color: var(--text-dim);
+      text-transform: uppercase;
+      height: 0; overflow: hidden;
+      transition: height 200ms ease;
+    }
+    .ptr.active { height: 36px; line-height: 36px; }
+    .ptr.refreshing { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <h1>CRONK</h1>
+        <span class="tag">window primer</span>
+      </div>
+      <div class="clock"><span class="dot"></span><span id="clock">--:--</span></div>
+    </header>
+
+    <main>
+      <div class="ptr" id="ptr">pull to refresh</div>
+      <div class="grid" id="grid"></div>
+      <button class="add-tile" id="addBtn">+ ADD TILE</button>
+    </main>
+
+    <footer>
+      <span>v0.1</span>
+      <span id="next-reset">next reset --:--</span>
+    </footer>
+  </div>
+
+  <div class="scrim" id="scrim"></div>
+  <div class="sheet" id="sheet">
+    <div class="handle"></div>
+    <h2 id="sheetTitle">Edit Tile</h2>
+
+    <div class="field">
+      <label>Name</label>
+      <input id="f-name" type="text" placeholder="Work Claude" autocomplete="off">
+      <div class="hint">Anything you'll recognize at 5am. e.g. Work Claude, Home Claude.</div>
+    </div>
+
+    <div class="field">
+      <label>Endpoint URL</label>
+      <input id="f-url" type="url" placeholder="https://your-tunnel.example/fire/acct1" autocomplete="off" inputmode="url">
+      <div class="hint">Endpoint that runs `claude -p "ping"` for this account.</div>
+    </div>
+
+    <div class="field">
+      <label>Method</label>
+      <select id="f-method">
+        <option>POST</option>
+        <option>GET</option>
+        <option>PUT</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>Headers (JSON, optional)</label>
+      <textarea id="f-headers" placeholder='{"Authorization":"Bearer xxx"}' spellcheck="false" autocapitalize="off"></textarea>
+    </div>
+
+    <div class="field">
+      <label>Body (optional)</label>
+      <textarea id="f-body" placeholder='{"prompt":"ping"}' spellcheck="false" autocapitalize="off"></textarea>
+    </div>
+
+    <div class="actions">
+      <button class="btn danger" id="deleteBtn" hidden>Delete</button>
+      <button class="btn" id="cancelBtn">Cancel</button>
+      <button class="btn primary" id="saveBtn">Save</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // ---------- state ----------
+    const STORAGE_KEY = 'cronk.tiles.v1';
+    const COOLDOWN_MS = 30_000;
+    const HEARTBEAT_MS = 30_000;
+    const DEFAULTS = [
+      { id: 't1', name: 'WORK CLAUDE', url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '' },
+      { id: 't2', name: 'HOME CLAUDE', url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '' }
+    ];
+
+    let tiles = load();
+    let editingId = null;
+    let serverOnline = false;
+    const cooldowns = new Map();
+
+    function load() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return [...DEFAULTS];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed) || parsed.length === 0) return [...DEFAULTS];
+        return parsed;
+      } catch { return [...DEFAULTS]; }
+    }
+    function save() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
+    }
+    function uid() { return 't' + Math.random().toString(36).slice(2, 8); }
+
+    // ---------- server heartbeat & auto-configure ----------
+    const dotEl = document.querySelector('.clock .dot');
+
+    async function heartbeat() {
+      try {
+        const res = await fetch('/api/status', { cache: 'no-store' });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        setOnline(true);
+        return data;
+      } catch {
+        setOnline(false);
+        return null;
+      }
+    }
+
+    function setOnline(online) {
+      serverOnline = online;
+      dotEl.classList.toggle('offline', !online);
+    }
+
+    function baseUrl() {
+      return window.location.origin;
+    }
+
+    async function autoConfigureFromServer() {
+      const data = await heartbeat();
+      if (!data || !data.accounts) return;
+
+      const allBlank = tiles.every(t => !t.url);
+      if (!allBlank) return;
+
+      const slugs = Object.keys(data.accounts);
+      if (slugs.length === 0) return;
+
+      tiles = slugs.map((slug, i) => {
+        const acct = data.accounts[slug];
+        const existing = tiles[i];
+        return {
+          id: existing ? existing.id : uid(),
+          name: (acct.label || slug).toUpperCase(),
+          url: `${baseUrl()}/fire/${slug}`,
+          method: 'POST',
+          headers: '',
+          body: '',
+          last: acct.last_fire ? new Date(acct.last_fire.ts).getTime() : 0,
+          lastStatus: acct.last_fire ? (acct.last_fire.ok ? '200' : 'ERR') : ''
+        };
+      });
+      save();
+      render();
+      toast('Auto-configured from server', 'ok');
+    }
+
+    setInterval(heartbeat, HEARTBEAT_MS);
+
+    // ---------- rendering ----------
+    const grid = document.getElementById('grid');
+    const addBtn = document.getElementById('addBtn');
+
+    function render() {
+      grid.innerHTML = '';
+      tiles.forEach(t => grid.appendChild(makeTile(t)));
+      addBtn.hidden = tiles.length >= 4;
+    }
+
+    function makeTile(t) {
+      const el = document.createElement('div');
+      el.className = 'tile';
+      el.dataset.id = t.id;
+      const cd = cooldowns.get(t.id);
+      const inCooldown = cd && cd > Date.now();
+
+      el.innerHTML = `
+        <div class="corner">
+          <div class="status" aria-hidden="true"></div>
+          <button class="gear" aria-label="edit">⚙</button>
+        </div>
+        <div>
+          <div class="label account"></div>
+          <div class="name">CRONK IT</div>
+        </div>
+        <div class="cooldown-label"></div>
+        <div class="cooldown-bar"></div>
+        <div class="meta">
+          <span>last <span class="last-val">${formatLast(t.last)}</span></span>
+          <span class="code">${t.lastStatus || '---'}</span>
+        </div>
+      `;
+      el.querySelector('.account').textContent = t.name || 'UNNAMED';
+
+      if (inCooldown) {
+        el.classList.add('cooldown');
+        const remaining = Math.ceil((cd - Date.now()) / 1000);
+        el.querySelector('.cooldown-label').textContent = `cooldown ${remaining}s`;
+        const pct = ((cd - Date.now()) / COOLDOWN_MS) * 100;
+        el.querySelector('.cooldown-bar').style.width = pct + '%';
+      }
+
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.gear')) { openSheet(t.id); return; }
+        fire(t.id);
+      });
+
+      return el;
+    }
+
+    function formatLast(ts) {
+      if (!ts) return 'never';
+      const diff = Date.now() - ts;
+      const s = Math.floor(diff / 1000);
+      if (s < 60) return s + 's ago';
+      const m = Math.floor(s / 60);
+      if (m < 60) return m + 'm ago';
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + 'h ago';
+      return Math.floor(h / 24) + 'd ago';
+    }
+
+    // ---------- cooldown ----------
+    let cooldownInterval = null;
+
+    function startCooldown(id) {
+      cooldowns.set(id, Date.now() + COOLDOWN_MS);
+      if (!cooldownInterval) {
+        cooldownInterval = setInterval(() => {
+          let anyActive = false;
+          for (const [tid, expires] of cooldowns) {
+            if (expires > Date.now()) { anyActive = true; break; }
+          }
+          render();
+          if (!anyActive) {
+            clearInterval(cooldownInterval);
+            cooldownInterval = null;
+          }
+        }, 1000);
+      }
+    }
+
+    // ---------- firing ----------
+    async function fire(id) {
+      const t = tiles.find(x => x.id === id);
+      if (!t) return;
+
+      if (cooldowns.get(id) > Date.now()) {
+        toast('Cooldown active, wait before firing again', 'err');
+        return;
+      }
+
+      const el = grid.querySelector(`[data-id="${id}"]`);
+      if (!t.url) {
+        toast('No endpoint set. Tap the gear to configure.', 'err');
+        openSheet(id);
+        return;
+      }
+      if (navigator.vibrate) navigator.vibrate(20);
+      el.dataset.state = 'firing';
+      el.classList.add('firing');
+
+      let headers = { 'content-type': 'application/json' };
+      if (t.headers && t.headers.trim()) {
+        try { headers = { ...headers, ...JSON.parse(t.headers) }; }
+        catch { /* tolerate, send default */ }
+      }
+
+      const opts = { method: t.method || 'POST', headers, mode: 'cors' };
+      if (opts.method !== 'GET' && t.body && t.body.trim()) opts.body = t.body;
+
+      try {
+        const res = await fetch(t.url, opts);
+        const ok = res.ok;
+        t.last = Date.now();
+        t.lastStatus = `${res.status}`;
+        save();
+        el.dataset.state = ok ? 'ok' : 'err';
+        toast(ok ? `${t.name}: fired (${res.status})` : `${t.name}: HTTP ${res.status}`, ok ? 'ok' : 'err');
+        if (navigator.vibrate) navigator.vibrate(ok ? [30, 40, 30] : 80);
+        startCooldown(id);
+      } catch (err) {
+        t.last = Date.now();
+        t.lastStatus = 'ERR';
+        save();
+        el.dataset.state = 'err';
+        toast(`${t.name}: ${err.message || 'network error'}`, 'err');
+        if (navigator.vibrate) navigator.vibrate(80);
+        startCooldown(id);
+      } finally {
+        el.classList.remove('firing');
+        setTimeout(() => render(), 1200);
+      }
+    }
+
+    // ---------- sheet ----------
+    const scrim = document.getElementById('scrim');
+    const sheet = document.getElementById('sheet');
+    const fName = document.getElementById('f-name');
+    const fUrl = document.getElementById('f-url');
+    const fMethod = document.getElementById('f-method');
+    const fHeaders = document.getElementById('f-headers');
+    const fBody = document.getElementById('f-body');
+    const deleteBtn = document.getElementById('deleteBtn');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const saveBtn = document.getElementById('saveBtn');
+    const sheetTitle = document.getElementById('sheetTitle');
+
+    function openSheet(id) {
+      editingId = id;
+      const t = tiles.find(x => x.id === id);
+      if (!t) return;
+      sheetTitle.textContent = `Edit · ${t.name || 'tile'}`;
+      fName.value = t.name || '';
+      fUrl.value = t.url || '';
+      fMethod.value = t.method || 'POST';
+      fHeaders.value = t.headers || '';
+      fBody.value = t.body || '';
+      deleteBtn.hidden = tiles.length <= 1;
+      scrim.classList.add('open');
+      requestAnimationFrame(() => sheet.classList.add('open'));
+    }
+    function closeSheet() {
+      sheet.classList.remove('open');
+      scrim.classList.remove('open');
+      editingId = null;
+    }
+    scrim.addEventListener('click', closeSheet);
+    cancelBtn.addEventListener('click', closeSheet);
+
+    saveBtn.addEventListener('click', () => {
+      const t = tiles.find(x => x.id === editingId);
+      if (!t) return closeSheet();
+      t.name = fName.value.trim() || 'UNNAMED';
+      t.url = fUrl.value.trim();
+      t.method = fMethod.value;
+      t.headers = fHeaders.value.trim();
+      t.body = fBody.value.trim();
+      save();
+      render();
+      closeSheet();
+      toast(`${t.name}: saved`, 'ok');
+    });
+
+    deleteBtn.addEventListener('click', () => {
+      if (tiles.length <= 1) return;
+      tiles = tiles.filter(x => x.id !== editingId);
+      save();
+      render();
+      closeSheet();
+    });
+
+    addBtn.addEventListener('click', () => {
+      if (tiles.length >= 4) return;
+      const t = { id: uid(), name: `CLAUDE ${tiles.length + 1}`, url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '' };
+      tiles.push(t);
+      save();
+      render();
+      openSheet(t.id);
+    });
+
+    // ---------- toast ----------
+    const toastEl = document.getElementById('toast');
+    let toastTimer = null;
+    function toast(msg, kind) {
+      toastEl.textContent = msg;
+      toastEl.className = 'toast show ' + (kind || '');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.className = 'toast', 2400);
+    }
+
+    // ---------- pull to refresh ----------
+    const ptrEl = document.getElementById('ptr');
+    let ptrStartY = 0;
+    let ptrActive = false;
+
+    document.addEventListener('touchstart', (e) => {
+      if (window.scrollY === 0 && e.touches.length === 1) {
+        ptrStartY = e.touches[0].clientY;
+        ptrActive = true;
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchmove', (e) => {
+      if (!ptrActive) return;
+      const dy = e.touches[0].clientY - ptrStartY;
+      if (dy > 60 && window.scrollY === 0) {
+        ptrEl.classList.add('active');
+      } else {
+        ptrEl.classList.remove('active');
+      }
+    }, { passive: true });
+
+    document.addEventListener('touchend', async () => {
+      if (!ptrActive) return;
+      ptrActive = false;
+      if (ptrEl.classList.contains('active')) {
+        ptrEl.textContent = 'refreshing...';
+        ptrEl.classList.add('refreshing');
+        await heartbeat();
+        render();
+        ptrEl.classList.remove('active', 'refreshing');
+        ptrEl.textContent = 'pull to refresh';
+      }
+    }, { passive: true });
+
+    // ---------- clock ----------
+    const clockEl = document.getElementById('clock');
+    const resetEl = document.getElementById('next-reset');
+    function tick() {
+      const d = new Date();
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      clockEl.textContent = `${hh}:${mm}`;
+      const lastFire = Math.max(0, ...tiles.map(t => t.last || 0));
+      if (lastFire) {
+        const reset = lastFire + 5 * 60 * 60 * 1000;
+        const r = new Date(reset);
+        resetEl.textContent = `next window ${String(r.getHours()).padStart(2,'0')}:${String(r.getMinutes()).padStart(2,'0')}`;
+      } else {
+        resetEl.textContent = 'next window --:--';
+      }
+    }
+    tick(); setInterval(tick, 1000 * 30);
+    setInterval(render, 60 * 1000);
+
+    // ---------- init ----------
+    render();
+    autoConfigureFromServer();
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

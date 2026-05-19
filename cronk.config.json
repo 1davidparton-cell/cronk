@@ -1,0 +1,16 @@
+{
+  "acct1": {
+    "label": "Account 1",
+    "home": "~/.cronk/acct1",
+    "prompt": "ping",
+    "schedule": ["05:00"],
+    "days": null
+  },
+  "acct2": {
+    "label": "Account 2",
+    "home": "~/.cronk/acct2",
+    "prompt": "ping",
+    "schedule": ["05:00"],
+    "days": null
+  }
+}
