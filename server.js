@@ -32,6 +32,14 @@ function resolveHome(p) {
   return p;
 }
 
+function unresolveHome(p) {
+  if (!p) return p;
+  const home = os.homedir();
+  if (p === home) return '~';
+  if (p.startsWith(home + path.sep)) return '~' + p.slice(home.length);
+  return p;
+}
+
 function loadConfig() {
   try {
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
@@ -61,6 +69,23 @@ function loadConfig() {
 }
 
 const ACCOUNTS = loadConfig();
+
+function saveConfig() {
+  const cfg = {};
+  for (const [slug, a] of Object.entries(ACCOUNTS)) {
+    const entry = {
+      label: a.label,
+      home: unresolveHome(a.home),
+      prompt: a.prompt,
+      schedule: a.schedule || [],
+      days: a.days ?? null
+    };
+    if (a.anchorTime) entry.anchorTime = a.anchorTime;
+    if (a.intervalMinutes) entry.intervalMinutes = a.intervalMinutes;
+    cfg[slug] = entry;
+  }
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+}
 
 // ---------- fire history ----------
 let history = [];
@@ -194,6 +219,21 @@ function hhmm(d) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+function effectiveSchedule(acct) {
+  if (acct.intervalMinutes && acct.anchorTime && /^\d{1,2}:\d{2}$/.test(acct.anchorTime)) {
+    const [h, m] = acct.anchorTime.split(':').map(Number);
+    const interval = Math.max(1, Math.min(1440, Number(acct.intervalMinutes)));
+    const times = [];
+    let mins = h * 60 + m;
+    while (mins < 24 * 60) {
+      times.push(`${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`);
+      mins += interval;
+    }
+    return times;
+  }
+  return Array.isArray(acct.schedule) ? acct.schedule : [];
+}
+
 function checkSchedules() {
   const now = new Date();
   const current = hhmm(now);
@@ -201,8 +241,9 @@ function checkSchedules() {
   const key = minuteKey(now);
 
   for (const [slug, acct] of Object.entries(ACCOUNTS)) {
-    if (!Array.isArray(acct.schedule) || acct.schedule.length === 0) continue;
-    if (!acct.schedule.includes(current)) continue;
+    const sched = effectiveSchedule(acct);
+    if (sched.length === 0) continue;
+    if (!sched.includes(current)) continue;
     if (Array.isArray(acct.days) && !acct.days.includes(dow)) continue;
     if (SCHEDULES_LAST.get(slug) === key) continue;
 
@@ -219,13 +260,14 @@ function checkSchedules() {
 }
 
 function nextRunFor(acct, fromDate = new Date()) {
-  if (!Array.isArray(acct.schedule) || acct.schedule.length === 0) return null;
+  const sched = effectiveSchedule(acct);
+  if (sched.length === 0) return null;
   for (let offset = 0; offset < 8; offset++) {
     const candidate = new Date(fromDate);
     candidate.setDate(candidate.getDate() + offset);
     const dow = candidate.getDay();
     if (Array.isArray(acct.days) && !acct.days.includes(dow)) continue;
-    const times = [...acct.schedule].sort();
+    const times = [...sched].sort();
     for (const t of times) {
       const [H, M] = t.split(':').map(Number);
       const fireAt = new Date(candidate);
@@ -271,6 +313,9 @@ const server = http.createServer(async (req, res) => {
       return [slug, {
         label: a.label,
         schedule: a.schedule || [],
+        anchorTime: a.anchorTime || null,
+        intervalMinutes: a.intervalMinutes || null,
+        effective_schedule: effectiveSchedule(a),
         days: a.days || 'every day',
         next_auto_fire: next ? next.toISOString() : null,
         last_fire: last
@@ -279,6 +324,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, {
       ok: true,
       service: 'cronk',
+      auth_required: !!SHARED_SECRET,
       tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
       accounts: view
     });
@@ -286,6 +332,69 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/history') {
     return json(res, 200, { ok: true, history: history.slice(-50).reverse() });
+  }
+
+  const am = req.url && req.url.match(/^\/api\/account\/([a-z0-9_-]+)\/?$/i);
+  if (am && req.method === 'PUT') {
+    if (!authOk(req)) return json(res, 401, { ok: false, error: 'unauthorized' });
+    const slug = am[1];
+    const acct = ACCOUNTS[slug];
+    if (!acct) return json(res, 404, { ok: false, error: 'unknown account', slug });
+
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 8192) { req.destroy(); } });
+    req.on('end', () => {
+      let parsed;
+      try { parsed = body ? JSON.parse(body) : {}; }
+      catch { return json(res, 400, { ok: false, error: 'invalid json' }); }
+
+      if (parsed.label !== undefined) {
+        if (typeof parsed.label !== 'string' || parsed.label.length === 0 || parsed.label.length > 80)
+          return json(res, 400, { ok: false, error: 'label must be 1-80 chars' });
+        acct.label = parsed.label;
+      }
+      if (parsed.anchorTime !== undefined) {
+        if (parsed.anchorTime !== null && !/^\d{1,2}:\d{2}$/.test(parsed.anchorTime))
+          return json(res, 400, { ok: false, error: 'anchorTime must be HH:MM' });
+        acct.anchorTime = parsed.anchorTime || undefined;
+      }
+      if (parsed.intervalMinutes !== undefined) {
+        const n = Number(parsed.intervalMinutes);
+        if (parsed.intervalMinutes !== null && (!Number.isFinite(n) || n < 1 || n > 1440))
+          return json(res, 400, { ok: false, error: 'intervalMinutes must be 1-1440' });
+        acct.intervalMinutes = parsed.intervalMinutes ? n : undefined;
+      }
+      if (parsed.schedule !== undefined) {
+        if (!Array.isArray(parsed.schedule) || parsed.schedule.some(s => typeof s !== 'string' || !/^\d{1,2}:\d{2}$/.test(s)))
+          return json(res, 400, { ok: false, error: 'schedule must be array of HH:MM' });
+        acct.schedule = parsed.schedule;
+      }
+      if (parsed.days !== undefined) {
+        if (parsed.days !== null && (!Array.isArray(parsed.days) || parsed.days.some(d => !Number.isInteger(d) || d < 0 || d > 6)))
+          return json(res, 400, { ok: false, error: 'days must be null or array of 0-6' });
+        acct.days = parsed.days;
+      }
+
+      try { saveConfig(); }
+      catch (e) { return json(res, 500, { ok: false, error: 'failed to persist: ' + e.message }); }
+
+      const next = nextRunFor(acct);
+      console.log(`[${new Date().toISOString()}] config -> ${slug} anchor=${acct.anchorTime || '-'} interval=${acct.intervalMinutes || '-'} next=${next ? next.toLocaleString() : 'none'}`);
+      return json(res, 200, {
+        ok: true,
+        slug,
+        account: {
+          label: acct.label,
+          schedule: acct.schedule || [],
+          anchorTime: acct.anchorTime || null,
+          intervalMinutes: acct.intervalMinutes || null,
+          effective_schedule: effectiveSchedule(acct),
+          days: acct.days || 'every day',
+          next_auto_fire: next ? next.toISOString() : null
+        }
+      });
+    });
+    return;
   }
 
   const m = req.url && req.url.match(/^\/fire\/([a-z0-9_-]+)\/?$/i);

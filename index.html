@@ -249,6 +249,26 @@
     .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent-dim); }
     .field textarea { min-height: 86px; resize: vertical; font-size: 12px; }
     .field .hint { font-size: 10px; color: var(--text-dim); margin-top: 5px; letter-spacing: 0.04em; }
+    .field.flex { flex: 1; margin-bottom: 0; }
+    .row { display: flex; gap: 10px; margin-bottom: 14px; }
+    .divider { height: 1px; background: var(--line); margin: 18px 0 14px; }
+    .subhead {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px; letter-spacing: 0.22em; color: var(--text-dim);
+      text-transform: uppercase; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .pill {
+      font-size: 9px; letter-spacing: 0.18em;
+      padding: 3px 8px; border-radius: 999px;
+      background: var(--tile); border: 1px solid var(--line);
+      color: var(--text-dim); text-transform: uppercase;
+    }
+    .pill.ok { color: var(--ok); border-color: var(--ok); }
+    .pill.err { color: var(--err); border-color: var(--err); }
+    input[type="time"], input[type="number"] {
+      font-family: inherit; font-variant-numeric: tabular-nums;
+    }
 
     .actions { display: flex; gap: 10px; padding-top: 6px; }
     .btn {
@@ -367,6 +387,35 @@
       <textarea id="f-body" placeholder='{"prompt":"ping"}' spellcheck="false" autocapitalize="off"></textarea>
     </div>
 
+    <div class="divider"></div>
+    <h3 class="subhead">Auto-fire timer <span id="sched-status" class="pill"></span></h3>
+
+    <div class="row">
+      <div class="field flex">
+        <label>Anchor time</label>
+        <input id="f-anchor" type="time" value="04:00" step="60">
+        <div class="hint">Daily start time in your Mac's local timezone.</div>
+      </div>
+      <div class="field flex">
+        <label>Every</label>
+        <input id="f-interval" type="number" min="1" max="1440" step="1" value="301" inputmode="numeric">
+        <div class="hint" id="interval-hint">minutes &middot; 5h 1m</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Days</label>
+      <select id="f-days">
+        <option value="all">Every day</option>
+        <option value="weekdays">Weekdays (Mon-Fri)</option>
+        <option value="weekends">Weekends (Sat-Sun)</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <div class="hint" id="sched-preview">Save the tile to send these times to your Mac.</div>
+    </div>
+
     <div class="actions">
       <button class="btn danger" id="deleteBtn" hidden>Delete</button>
       <button class="btn" id="cancelBtn">Cancel</button>
@@ -381,14 +430,17 @@
     const STORAGE_KEY = 'cronk.tiles.v1';
     const COOLDOWN_MS = 30_000;
     const HEARTBEAT_MS = 30_000;
+    const DEFAULT_INTERVAL = 301;
+    const DEFAULT_ANCHOR = '04:00';
     const DEFAULTS = [
-      { id: 't1', name: 'WORK CLAUDE', url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '' },
-      { id: 't2', name: 'HOME CLAUDE', url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '' }
+      { id: 't1', name: 'WORK CLAUDE', url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '', anchorTime: DEFAULT_ANCHOR, intervalMinutes: DEFAULT_INTERVAL, days: 'all' },
+      { id: 't2', name: 'HOME CLAUDE', url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '', anchorTime: DEFAULT_ANCHOR, intervalMinutes: DEFAULT_INTERVAL, days: 'all' }
     ];
 
     let tiles = load();
     let editingId = null;
     let serverOnline = false;
+    let lastStatusData = null;
     const cooldowns = new Map();
 
     function load() {
@@ -397,7 +449,12 @@
         if (!raw) return [...DEFAULTS];
         const parsed = JSON.parse(raw);
         if (!Array.isArray(parsed) || parsed.length === 0) return [...DEFAULTS];
-        return parsed;
+        return parsed.map(t => ({
+          anchorTime: DEFAULT_ANCHOR,
+          intervalMinutes: DEFAULT_INTERVAL,
+          days: 'all',
+          ...t
+        }));
       } catch { return [...DEFAULTS]; }
     }
     function save() {
@@ -405,14 +462,87 @@
     }
     function uid() { return 't' + Math.random().toString(36).slice(2, 8); }
 
+    // ---------- helpers ----------
+    function parseSlugFromUrl(u) {
+      if (!u) return null;
+      const m = u.match(/\/fire\/([a-z0-9_-]+)\/?$/i);
+      return m ? m[1] : null;
+    }
+    function serverOriginFromUrl(u) {
+      try { return new URL(u).origin; } catch { return null; }
+    }
+    function authHeaderFromHeadersJson(s) {
+      if (!s || !s.trim()) return null;
+      try {
+        const h = JSON.parse(s);
+        for (const k of Object.keys(h)) {
+          if (k.toLowerCase() === 'authorization') return h[k];
+        }
+      } catch {}
+      return null;
+    }
+    function daysArrFromSelect(v) {
+      if (v === 'weekdays') return [1, 2, 3, 4, 5];
+      if (v === 'weekends') return [0, 6];
+      return null;
+    }
+    function daysSelectFromAcct(daysVal) {
+      if (!Array.isArray(daysVal)) return 'all';
+      const s = [...daysVal].sort().join(',');
+      if (s === '1,2,3,4,5') return 'weekdays';
+      if (s === '0,6') return 'weekends';
+      return 'all';
+    }
+    function formatInterval(m) {
+      m = Math.max(1, Math.floor(Number(m) || 0));
+      const h = Math.floor(m / 60);
+      const r = m % 60;
+      if (h === 0) return `${r}m`;
+      if (r === 0) return `${h}h`;
+      return `${h}h ${r}m`;
+    }
+    function intervalSchedule(anchor, intervalMin) {
+      if (!/^\d{1,2}:\d{2}$/.test(anchor) || !Number.isFinite(intervalMin) || intervalMin < 1) return [];
+      const [h, mm] = anchor.split(':').map(Number);
+      const out = [];
+      let mins = h * 60 + mm;
+      while (mins < 24 * 60) {
+        out.push(`${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`);
+        mins += intervalMin;
+      }
+      return out;
+    }
+
     // ---------- server heartbeat & auto-configure ----------
     const dotEl = document.querySelector('.clock .dot');
 
+    function pickServerOrigin() {
+      for (const t of tiles) {
+        const o = serverOriginFromUrl(t.url);
+        if (o) return o;
+      }
+      return window.location.origin;
+    }
+    function pickAuthHeader() {
+      for (const t of tiles) {
+        const a = authHeaderFromHeadersJson(t.headers);
+        if (a) return a;
+      }
+      return null;
+    }
+
     async function heartbeat() {
+      const origin = pickServerOrigin();
+      const auth = pickAuthHeader();
       try {
-        const res = await fetch('/api/status', { cache: 'no-store' });
+        const res = await fetch(`${origin}/api/status`, {
+          cache: 'no-store',
+          mode: 'cors',
+          headers: auth ? { authorization: auth } : {}
+        });
         if (!res.ok) throw new Error();
         const data = await res.json();
+        lastStatusData = data;
         setOnline(true);
         return data;
       } catch {
@@ -426,16 +556,15 @@
       dotEl.classList.toggle('offline', !online);
     }
 
-    function baseUrl() {
-      return window.location.origin;
-    }
-
     async function autoConfigureFromServer() {
       const data = await heartbeat();
       if (!data || !data.accounts) return;
 
       const allBlank = tiles.every(t => !t.url);
-      if (!allBlank) return;
+      if (!allBlank) {
+        mergeServerSchedule(data);
+        return;
+      }
 
       const slugs = Object.keys(data.accounts);
       if (slugs.length === 0) return;
@@ -446,17 +575,34 @@
         return {
           id: existing ? existing.id : uid(),
           name: (acct.label || slug).toUpperCase(),
-          url: `${baseUrl()}/fire/${slug}`,
+          url: `${window.location.origin}/fire/${slug}`,
           method: 'POST',
           headers: '',
           body: '',
           last: acct.last_fire ? new Date(acct.last_fire.ts).getTime() : 0,
-          lastStatus: acct.last_fire ? (acct.last_fire.ok ? '200' : 'ERR') : ''
+          lastStatus: acct.last_fire ? (acct.last_fire.ok ? '200' : 'ERR') : '',
+          anchorTime: acct.anchorTime || DEFAULT_ANCHOR,
+          intervalMinutes: acct.intervalMinutes || DEFAULT_INTERVAL,
+          days: daysSelectFromAcct(acct.days)
         };
       });
       save();
       render();
       toast('Auto-configured from server', 'ok');
+    }
+
+    function mergeServerSchedule(data) {
+      let changed = false;
+      for (const t of tiles) {
+        const slug = parseSlugFromUrl(t.url);
+        if (!slug || !data.accounts[slug]) continue;
+        const acct = data.accounts[slug];
+        if (acct.anchorTime && acct.anchorTime !== t.anchorTime) { t.anchorTime = acct.anchorTime; changed = true; }
+        if (acct.intervalMinutes && acct.intervalMinutes !== t.intervalMinutes) { t.intervalMinutes = acct.intervalMinutes; changed = true; }
+        const ds = daysSelectFromAcct(acct.days);
+        if (ds !== t.days) { t.days = ds; changed = true; }
+      }
+      if (changed) save();
     }
 
     setInterval(heartbeat, HEARTBEAT_MS);
@@ -605,10 +751,37 @@
     const fMethod = document.getElementById('f-method');
     const fHeaders = document.getElementById('f-headers');
     const fBody = document.getElementById('f-body');
+    const fAnchor = document.getElementById('f-anchor');
+    const fInterval = document.getElementById('f-interval');
+    const fDays = document.getElementById('f-days');
+    const intervalHint = document.getElementById('interval-hint');
+    const schedPreview = document.getElementById('sched-preview');
+    const schedStatus = document.getElementById('sched-status');
     const deleteBtn = document.getElementById('deleteBtn');
     const cancelBtn = document.getElementById('cancelBtn');
     const saveBtn = document.getElementById('saveBtn');
     const sheetTitle = document.getElementById('sheetTitle');
+
+    function updateSchedPreview() {
+      const anchor = fAnchor.value || DEFAULT_ANCHOR;
+      const interval = Math.max(1, parseInt(fInterval.value, 10) || DEFAULT_INTERVAL);
+      intervalHint.textContent = `minutes · ${formatInterval(interval)}`;
+      const times = intervalSchedule(anchor, interval);
+      if (times.length === 0) {
+        schedPreview.textContent = 'Invalid schedule.';
+      } else if (times.length <= 6) {
+        schedPreview.textContent = `Fires daily: ${times.join(' · ')}`;
+      } else {
+        schedPreview.textContent = `Fires daily: ${times.slice(0, 5).join(' · ')} · +${times.length - 5}`;
+      }
+    }
+    fAnchor.addEventListener('input', updateSchedPreview);
+    fInterval.addEventListener('input', updateSchedPreview);
+
+    function setSchedStatus(kind, label) {
+      schedStatus.className = 'pill' + (kind ? ' ' + kind : '');
+      schedStatus.textContent = label || '';
+    }
 
     function openSheet(id) {
       editingId = id;
@@ -620,6 +793,14 @@
       fMethod.value = t.method || 'POST';
       fHeaders.value = t.headers || '';
       fBody.value = t.body || '';
+      fAnchor.value = t.anchorTime || DEFAULT_ANCHOR;
+      fInterval.value = t.intervalMinutes || DEFAULT_INTERVAL;
+      fDays.value = t.days || 'all';
+      updateSchedPreview();
+      const slug = parseSlugFromUrl(t.url);
+      if (!slug) setSchedStatus('', 'local only');
+      else if (serverOnline) setSchedStatus('ok', `→ ${slug}`);
+      else setSchedStatus('err', 'server offline');
       deleteBtn.hidden = tiles.length <= 1;
       scrim.classList.add('open');
       requestAnimationFrame(() => sheet.classList.add('open'));
@@ -632,7 +813,33 @@
     scrim.addEventListener('click', closeSheet);
     cancelBtn.addEventListener('click', closeSheet);
 
-    saveBtn.addEventListener('click', () => {
+    async function syncScheduleToServer(t) {
+      const slug = parseSlugFromUrl(t.url);
+      if (!slug) return { ok: false, reason: 'no-slug' };
+      const origin = serverOriginFromUrl(t.url);
+      if (!origin) return { ok: false, reason: 'bad-url' };
+      const auth = authHeaderFromHeadersJson(t.headers);
+      const headers = { 'content-type': 'application/json' };
+      if (auth) headers.authorization = auth;
+      try {
+        const res = await fetch(`${origin}/api/account/${slug}`, {
+          method: 'PUT',
+          mode: 'cors',
+          headers,
+          body: JSON.stringify({
+            anchorTime: t.anchorTime,
+            intervalMinutes: t.intervalMinutes,
+            days: daysArrFromSelect(t.days)
+          })
+        });
+        if (!res.ok) return { ok: false, reason: `http-${res.status}` };
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, reason: e.message || 'network' };
+      }
+    }
+
+    saveBtn.addEventListener('click', async () => {
       const t = tiles.find(x => x.id === editingId);
       if (!t) return closeSheet();
       t.name = fName.value.trim() || 'UNNAMED';
@@ -640,10 +847,25 @@
       t.method = fMethod.value;
       t.headers = fHeaders.value.trim();
       t.body = fBody.value.trim();
+      t.anchorTime = fAnchor.value || DEFAULT_ANCHOR;
+      t.intervalMinutes = Math.max(1, parseInt(fInterval.value, 10) || DEFAULT_INTERVAL);
+      t.days = fDays.value || 'all';
       save();
       render();
+
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving…';
+      const slug = parseSlugFromUrl(t.url);
+      if (slug) {
+        const r = await syncScheduleToServer(t);
+        if (r.ok) toast(`${t.name}: saved + scheduled (${formatInterval(t.intervalMinutes)} from ${t.anchorTime})`, 'ok');
+        else toast(`${t.name}: saved locally · schedule sync failed (${r.reason})`, 'err');
+      } else {
+        toast(`${t.name}: saved locally · set Endpoint URL to schedule`, '');
+      }
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save';
       closeSheet();
-      toast(`${t.name}: saved`, 'ok');
     });
 
     deleteBtn.addEventListener('click', () => {
@@ -656,7 +878,7 @@
 
     addBtn.addEventListener('click', () => {
       if (tiles.length >= 4) return;
-      const t = { id: uid(), name: `CLAUDE ${tiles.length + 1}`, url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '' };
+      const t = { id: uid(), name: `CLAUDE ${tiles.length + 1}`, url: '', method: 'POST', headers: '', body: '', last: 0, lastStatus: '', anchorTime: DEFAULT_ANCHOR, intervalMinutes: DEFAULT_INTERVAL, days: 'all' };
       tiles.push(t);
       save();
       render();

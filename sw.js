@@ -1,5 +1,5 @@
 // Cronk service worker - minimal, app-shell caching only.
-const CACHE = 'cronk-v4';
+const CACHE = 'cronk-v5';
 const SHELL = [
   './',
   './index.html',
