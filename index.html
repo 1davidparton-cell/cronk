@@ -266,6 +266,7 @@
     }
     .pill.ok { color: var(--ok); border-color: var(--ok); }
     .pill.err { color: var(--err); border-color: var(--err); }
+    .pill.warn { color: var(--accent); border-color: var(--accent-dim); }
     input[type="time"], input[type="number"] {
       font-family: inherit; font-variant-numeric: tabular-nums;
     }
@@ -762,25 +763,42 @@
     const saveBtn = document.getElementById('saveBtn');
     const sheetTitle = document.getElementById('sheetTitle');
 
+    function previewTimesText(times) {
+      if (times.length === 0) return 'Invalid schedule.';
+      if (times.length <= 6) return `Fires daily: ${times.join(' · ')}`;
+      return `Fires daily: ${times.slice(0, 5).join(' · ')} · +${times.length - 5} more`;
+    }
+
     function updateSchedPreview() {
       const anchor = fAnchor.value || DEFAULT_ANCHOR;
       const interval = Math.max(1, parseInt(fInterval.value, 10) || DEFAULT_INTERVAL);
       intervalHint.textContent = `minutes · ${formatInterval(interval)}`;
       const times = intervalSchedule(anchor, interval);
-      if (times.length === 0) {
-        schedPreview.textContent = 'Invalid schedule.';
-      } else if (times.length <= 6) {
-        schedPreview.textContent = `Fires daily: ${times.join(' · ')}`;
+      const slug = editingId ? parseSlugFromUrl((tiles.find(x => x.id === editingId) || {}).url || fUrl.value) : null;
+      const base = previewTimesText(times);
+      if (!slug) {
+        schedPreview.innerHTML = `${base}<br><span style="color:var(--accent)">No Endpoint URL set — auto-fire runs on your Mac, not in the browser. Set the URL above and Save to schedule there.</span>`;
+      } else if (!serverOnline) {
+        schedPreview.innerHTML = `${base}<br><span style="color:var(--err)">Mac unreachable — schedule will sync to <code>${slug}</code> when it comes online.</span>`;
       } else {
-        schedPreview.textContent = `Fires daily: ${times.slice(0, 5).join(' · ')} · +${times.length - 5}`;
+        schedPreview.innerHTML = `${base}<br><span style="color:var(--ok)">Synced to <code>${slug}</code> on your Mac.</span>`;
       }
     }
     fAnchor.addEventListener('input', updateSchedPreview);
     fInterval.addEventListener('input', updateSchedPreview);
+    // Re-eval the pill + preview if the URL changes mid-edit.
+    // (Same listener doesn't exist on fUrl yet; add below.)
 
     function setSchedStatus(kind, label) {
       schedStatus.className = 'pill' + (kind ? ' ' + kind : '');
       schedStatus.textContent = label || '';
+    }
+
+    function refreshSchedStatus(t) {
+      const slug = parseSlugFromUrl(t.url || fUrl.value);
+      if (!slug) setSchedStatus('warn', 'needs endpoint URL');
+      else if (serverOnline) setSchedStatus('ok', `→ ${slug}`);
+      else setSchedStatus('err', 'server offline');
     }
 
     function openSheet(id) {
@@ -796,15 +814,18 @@
       fAnchor.value = t.anchorTime || DEFAULT_ANCHOR;
       fInterval.value = t.intervalMinutes || DEFAULT_INTERVAL;
       fDays.value = t.days || 'all';
+      refreshSchedStatus(t);
       updateSchedPreview();
-      const slug = parseSlugFromUrl(t.url);
-      if (!slug) setSchedStatus('', 'local only');
-      else if (serverOnline) setSchedStatus('ok', `→ ${slug}`);
-      else setSchedStatus('err', 'server offline');
       deleteBtn.hidden = tiles.length <= 1;
       scrim.classList.add('open');
       requestAnimationFrame(() => sheet.classList.add('open'));
     }
+    fUrl.addEventListener('input', () => {
+      const t = tiles.find(x => x.id === editingId);
+      if (!t) return;
+      refreshSchedStatus({ url: fUrl.value });
+      updateSchedPreview();
+    });
     function closeSheet() {
       sheet.classList.remove('open');
       scrim.classList.remove('open');
