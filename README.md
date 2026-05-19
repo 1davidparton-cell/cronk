@@ -1,5 +1,7 @@
 # Cronk
 
+> Live: **https://cronk.vercel.app** · Source: **https://github.com/1davidparton-cell/cronk**
+
 A mobile-first PWA with 2 to 4 tiles. Each tile fires a configurable webhook
 that runs `claude -p "ping"` against a specific account, priming your usage
 window early in the morning.
